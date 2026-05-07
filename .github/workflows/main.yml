@@ -1,0 +1,28 @@
+name: Build and Release Rust EXE
+
+on:
+  push:
+    branches:
+      - main  # devからmainへマージ（push）された時に実行
+  workflow_dispatch: # 手動実行を可能にする設定
+
+jobs:
+  build:
+    name: Build for Windows
+    runs-on: windows-latest # exeを生成するためWindows環境を使用
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build project
+        run: cargo build --release
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe
+          path: target/release/vical.exe
