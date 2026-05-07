@@ -1,0 +1,39 @@
+name: Build and Release
+
+on:
+  push:
+    # タグ（例: v1.0.0）がプッシュされた時にリリースを作成する設定が一般的です
+    tags:
+      - "v*" 
+  workflow_dispatch: # 手動実行も可能
+
+jobs:
+  build-and-release:
+    name: Build and Release
+    runs-on: windows-latest
+    
+    # Releasesへの書き込み権限を明示的に付与
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build project
+        run: cargo build --release
+
+      - name: Create ZIP archive
+        shell: pwsh
+        run: |
+          Compress-Archive -Path target/release/*.exe -DestinationPath my-project-windows.zip
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') # タグがプッシュされた時のみ実行
+        with:
+          files: vical.zip
+          generate_release_notes: true
