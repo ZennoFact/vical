@@ -1,15 +1,20 @@
-name: Build and Release Rust EXE
+name: Build and Release
 
 on:
   push:
-    branches:
-      - main  # devからmainへマージ（push）された時に実行
-  workflow_dispatch: # 手動実行を可能にする設定
+    # タグ（例: v1.0.0）がプッシュされた時にリリースを作成する設定が一般的です
+    tags:
+      - "v*" 
+  workflow_dispatch: # 手動実行も可能
 
 jobs:
-  build:
-    name: Build for Windows
-    runs-on: windows-latest # exeを生成するためWindows環境を使用
+  build-and-release:
+    name: Build and Release
+    runs-on: windows-latest
+    
+    # Releasesへの書き込み権限を明示的に付与
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout code
@@ -21,8 +26,14 @@ jobs:
       - name: Build project
         run: cargo build --release
 
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+      - name: Create ZIP archive
+        shell: pwsh
+        run: |
+          Compress-Archive -Path target/release/*.exe -DestinationPath my-project-windows.zip
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') # タグがプッシュされた時のみ実行
         with:
-          name: windows-exe
-          path: target/release/vical.exe
+          files: vical.zip
+          generate_release_notes: true
