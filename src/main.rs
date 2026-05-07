@@ -1,6 +1,7 @@
 use std::env;
 use std::fs;
 use std::io;
+use std::io::Write;
 use std::iter::Peekable;
 use std::path::PathBuf;
 use std::str::Chars;
@@ -115,6 +116,14 @@ fn main() {
         return;
     }
 
+    if args[1] == "--add" {
+        if let Err(e) = run_add_mode() {
+            eprintln!("Add mode error: {}", e);
+            std::process::exit(1);
+        }
+        return;
+    }
+
     let expr: String = args[1..].concat();
     let mut parser = Parser::new(&expr);
     match parser.parse() {
@@ -130,6 +139,35 @@ fn main() {
             std::process::exit(1);
         }
     }
+}
+
+fn run_add_mode() -> io::Result<()> {
+    let mut total = 0.0_f64;
+    let stdin = io::stdin();
+    let mut stdout = io::stdout();
+
+    loop {
+        print!("#vical-add: {} > ", App::format_result(total));
+        stdout.flush()?;
+
+        let mut line = String::new();
+        let read = stdin.read_line(&mut line)?;
+        if read == 0 {
+            break;
+        }
+
+        let input = line.trim();
+        if input.eq_ignore_ascii_case("q") {
+            break;
+        }
+
+        match input.parse::<f64>() {
+            Ok(value) => total += value,
+            Err(_) => eprintln!("Invalid number: {}", input),
+        }
+    }
+
+    Ok(())
 }
 
 // ====== TUI ======
@@ -352,7 +390,7 @@ impl App {
 
         match self.mode {
             Mode::Input => match key.code {
-                KeyCode::Enter => self.evaluate(),
+                KeyCode::Enter | KeyCode::Char('=') => self.evaluate(),
                 KeyCode::Backspace => {
                     if self.error.is_some() {
                         self.error = None;
