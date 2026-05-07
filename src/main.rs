@@ -226,7 +226,7 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(3)])
+        .constraints([Constraint::Min(3), Constraint::Length(2)])
         .split(area);
 
     let items: Vec<ListItem> = app
@@ -239,14 +239,9 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
     let mut list_state = ListState::default();
     list_state.select(app.selected);
 
-    let list_title = match app.mode {
-        Mode::Navigate => "履歴  [j:↓新  k:↑古  Enter:挿入  Esc:戻る]",
-        Mode::Input => "履歴  [j/k で選択]",
-    };
-
     let list = List::new(items)
         .direction(ListDirection::BottomToTop)
-        .block(Block::default().borders(Borders::ALL).title(list_title))
+        .block(Block::default().borders(Borders::ALL).title("履歴"))
         .highlight_style(
             Style::default()
                 .bg(Color::Blue)
@@ -257,31 +252,44 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
 
     f.render_stateful_widget(list, chunks[0], &mut list_state);
 
-    let (input_display, border_style) = if let Some(err) = &app.error {
-        (
-            format!("エラー: {}", err),
-            Style::default().fg(Color::Red),
-        )
+    // Split bottom area into 2 rows: status line + input line
+    let bottom_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Length(1)])
+        .split(chunks[1]);
+
+    // Status line (mode + help) - gray background, black text
+    let (mode_text, help_text) = match app.mode {
+        Mode::Input => ("INPUT", "[Enter:計算  Ctrl+C:終了  j/k:履歴選択]"),
+        Mode::Navigate => ("SELECT", "[j:↓新  k:↑古  Enter:挿入  Esc:戻る]"),
+    };
+    let status_line = format!("{:<8} {}", mode_text, help_text);
+    let status = Paragraph::new(status_line)
+        .style(Style::default().bg(Color::Gray).fg(Color::Black));
+    f.render_widget(status, bottom_chunks[0]);
+
+    // Input line with "vical > " prefix
+    let prefix = "vical > ";
+    let (input_text, text_color) = if let Some(err) = &app.error {
+        (format!("{}{}", prefix, err), Some(Color::Red))
     } else {
-        (app.input_string(), Style::default())
+        (format!("{}{}", prefix, app.input_string()), None)
     };
 
-    let input_title = match app.mode {
-        Mode::Input => "計算式  [Enter:計算  Ctrl+C:終了]",
-        Mode::Navigate => "計算式  [選択モード]",
+    let input_style = if let Some(color) = text_color {
+        Style::default().fg(color)
+    } else {
+        Style::default()
     };
+    let input_para = Paragraph::new(input_text).style(input_style);
+    f.render_widget(input_para, bottom_chunks[1]);
 
-    let input_block = Block::default()
-        .borders(Borders::ALL)
-        .title(input_title)
-        .border_style(border_style);
-
-    f.render_widget(Paragraph::new(input_display).block(input_block), chunks[1]);
-
+    // Cursor positioning
     if app.mode == Mode::Input && app.error.is_none() {
-        let cursor_x = chunks[1].x + 1 + app.cursor as u16;
-        let cursor_y = chunks[1].y + 1;
-        let max_x = chunks[1].x + chunks[1].width.saturating_sub(2);
+        let prefix_len = prefix.len() as u16;
+        let cursor_x = bottom_chunks[1].x + prefix_len + app.cursor as u16;
+        let cursor_y = bottom_chunks[1].y;
+        let max_x = bottom_chunks[1].x + bottom_chunks[1].width;
         if cursor_x <= max_x {
             f.set_cursor_position((cursor_x, cursor_y));
         }
