@@ -1,10 +1,12 @@
 use std::env;
+use std::fs;
 use std::io;
 use std::iter::Peekable;
+use std::path::PathBuf;
 use std::str::Chars;
 
 use crossterm::{
-    event::{self, Event, KeyCode, KeyModifiers},
+    event::{self, Event, KeyCode},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -15,22 +17,102 @@ use ratatui::{
     widgets::{Block, Borders, List, ListDirection, ListItem, ListState, Paragraph},
     Terminal,
 };
+use serde::Deserialize;
+
+#[derive(Clone, Copy)]
+struct Theme {
+    accent_bg: Color,
+    accent_fg: Color,
+}
+
+impl Default for Theme {
+    fn default() -> Self {
+        Theme {
+            accent_bg: Color::Rgb(173, 216, 230),
+            accent_fg: Color::Black,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct SettingFile {
+    accent_color: RgbSetting,
+    accent_text_color: Option<RgbSetting>,
+}
+
+#[derive(Deserialize)]
+struct RgbSetting {
+    r: u8,
+    g: u8,
+    b: u8,
+}
+
+impl RgbSetting {
+    fn to_color(&self) -> Color {
+        Color::Rgb(self.r, self.g, self.b)
+    }
+}
+
+fn config_file_path() -> io::Result<PathBuf> {
+    let home = env::var("HOME")
+        .or_else(|_| env::var("USERPROFILE"))
+        .map_err(|_| io::Error::new(io::ErrorKind::NotFound, "Home directory not found"))?;
+    Ok(PathBuf::from(home)
+        .join(".config")
+        .join("vical")
+        .join("setting.toml"))
+}
+
+fn default_setting_toml() -> &'static str {
+    "[accent_color]\nr = 173\ng = 216\nb = 230\n\n[accent_text_color]\nr = 0\ng = 0\nb = 0\n"
+}
+
+fn load_theme() -> Theme {
+    let path = match config_file_path() {
+        Ok(path) => path,
+        Err(_) => return Theme::default(),
+    };
+
+    if !path.exists() {
+        if let Some(parent) = path.parent() {
+            if fs::create_dir_all(parent).is_err() {
+                return Theme::default();
+            }
+        }
+        if fs::write(&path, default_setting_toml()).is_err() {
+            return Theme::default();
+        }
+    }
+
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(_) => return Theme::default(),
+    };
+
+    let parsed: SettingFile = match toml::from_str(&content) {
+        Ok(parsed) => parsed,
+        Err(_) => return Theme::default(),
+    };
+
+    Theme {
+        accent_bg: parsed.accent_color.to_color(),
+        accent_fg: parsed
+            .accent_text_color
+            .as_ref()
+            .map(RgbSetting::to_color)
+            .unwrap_or(Color::Black),
+    }
+}
 
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    if args.len() == 2 && args[1] == "-v" {
+    if args.len() < 2 {
         if let Err(e) = run_tui() {
-            eprintln!("TUIエラー: {}", e);
+            eprintln!("TUI error: {}", e);
             std::process::exit(1);
         }
         return;
-    }
-
-    if args.len() < 2 {
-        eprintln!("使い方: vical <式>");
-        eprintln!("       vical -v  (対話モード)");
-        std::process::exit(1);
     }
 
     let expr: String = args[1..].concat();
@@ -44,7 +126,7 @@ fn main() {
             }
         }
         Err(e) => {
-            eprintln!("エラー: {}", e);
+            eprintln!("Error: {}", e);
             std::process::exit(1);
         }
     }
@@ -56,6 +138,38 @@ fn main() {
 enum Mode {
     Input,
     Navigate,
+    Help,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum CalcMode {
+    Calc,
+    Add,
+    Sub,
+    Mul,
+    Div,
+}
+
+impl CalcMode {
+    fn label(self) -> &'static str {
+        match self {
+            CalcMode::Calc => "CALC",
+            CalcMode::Add => "ADD",
+            CalcMode::Sub => "SUB",
+            CalcMode::Mul => "MUL",
+            CalcMode::Div => "DIV",
+        }
+    }
+
+    fn symbol(self) -> &'static str {
+        match self {
+            CalcMode::Calc => "",
+            CalcMode::Add => "+",
+            CalcMode::Sub => "-",
+            CalcMode::Mul => "*",
+            CalcMode::Div => "/",
+        }
+    }
 }
 
 struct App {
@@ -64,23 +178,43 @@ struct App {
     cursor: usize,
     selected: Option<usize>,
     mode: Mode,
+    calc_mode: CalcMode,
+    accumulator: Option<f64>,
+    theme: Theme,
     error: Option<String>,
 }
 
 impl App {
-    fn new() -> Self {
+    fn new(theme: Theme) -> Self {
         App {
             history: Vec::new(),
             input: Vec::new(),
             cursor: 0,
             selected: None,
             mode: Mode::Input,
+            calc_mode: CalcMode::Calc,
+            accumulator: None,
+            theme,
             error: None,
         }
     }
 
     fn input_string(&self) -> String {
         self.input.iter().collect()
+    }
+
+    fn is_command_input(&self) -> bool {
+        self.input.first() == Some(&':')
+    }
+
+    fn is_allowed_input_char(&self, c: char) -> bool {
+        if self.is_command_input() {
+            c.is_ascii_lowercase()
+        } else if self.input.is_empty() && self.cursor == 0 && c == ':' {
+            true
+        } else {
+            c.is_ascii_digit() || matches!(c, '+' | '-' | '*' | '/' | '%' | 'P' | '(' | ')' | ' ')
+        }
     }
 
     fn format_result(result: f64) -> String {
@@ -91,23 +225,95 @@ impl App {
         }
     }
 
+    fn parse_value(input: &str) -> Result<f64, String> {
+        let mut parser = Parser::new(input);
+        parser.parse()
+    }
+
+    fn apply_command(&mut self, command: &str) {
+        let cmd = command.trim().to_ascii_lowercase();
+        let next_mode = match cmd.as_str() {
+            ":add" => Some(CalcMode::Add),
+            ":sub" => Some(CalcMode::Sub),
+            ":mul" => Some(CalcMode::Mul),
+            ":div" => Some(CalcMode::Div),
+            ":calc" => Some(CalcMode::Calc),
+            _ => None,
+        };
+
+        if let Some(mode) = next_mode {
+            self.calc_mode = mode;
+            self.accumulator = None;
+            self.error = None;
+        } else {
+            self.error = Some(format!("Unknown command: {}", command));
+        }
+
+        self.input.clear();
+        self.cursor = 0;
+    }
+
     fn evaluate(&mut self) {
         let expr = self.input_string();
         if expr.trim().is_empty() {
             return;
         }
-        let mut parser = Parser::new(&expr);
-        match parser.parse() {
-            Ok(result) => {
+
+        if expr.trim_start().starts_with(':') {
+            self.apply_command(&expr);
+            return;
+        }
+
+        match Self::parse_value(&expr) {
+            Ok(value) => {
+                let prev_acc = self.accumulator;
+                let result = match self.calc_mode {
+                    CalcMode::Calc => value,
+                    CalcMode::Add => self.accumulator.unwrap_or(0.0) + value,
+                    CalcMode::Sub => match self.accumulator {
+                        Some(acc) => acc - value,
+                        None => value,
+                    },
+                    CalcMode::Mul => match self.accumulator {
+                        Some(acc) => acc * value,
+                        None => value,
+                    },
+                    CalcMode::Div => match self.accumulator {
+                        Some(acc) => {
+                            if value == 0.0 {
+                                self.error = Some("Division by zero".to_string());
+                                return;
+                            }
+                            acc / value
+                        }
+                        None => value,
+                    },
+                };
+
+                if self.calc_mode != CalcMode::Calc {
+                    self.accumulator = Some(result);
+                }
+
+                let history_expr = if self.calc_mode == CalcMode::Calc {
+                    expr.clone()
+                } else if let Some(prev) = prev_acc {
+                    format!(
+                        "{} {} {}",
+                        Self::format_result(prev),
+                        self.calc_mode.symbol(),
+                        expr
+                    )
+                } else {
+                    expr.clone()
+                };
+
                 let result_str = Self::format_result(result);
-                self.history.push((expr, result_str));
+                self.history.push((history_expr, result_str));
                 self.input.clear();
                 self.cursor = 0;
                 self.error = None;
             }
-            Err(e) => {
-                self.error = Some(e);
-            }
+            Err(e) => self.error = Some(e),
         }
     }
 
@@ -119,18 +325,40 @@ impl App {
     }
 
     fn handle_key(&mut self, key: event::KeyEvent) -> bool {
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+        if key.code == KeyCode::Char('?') {
+            self.mode = Mode::Help;
+            self.selected = None;
+            return false;
+        }
+
+        if self.mode == Mode::Help {
+            if key.code == KeyCode::Esc {
+                self.mode = Mode::Input;
+            }
+            return false;
+        }
+
+        if key.code == KeyCode::Char('q') && self.mode == Mode::Input && !self.is_command_input() {
             return true;
+        }
+
+        if key.code == KeyCode::Char('c') && self.mode == Mode::Input && !self.is_command_input() {
+            self.accumulator = None;
+            self.error = None;
+            self.input.clear();
+            self.cursor = 0;
+            return false;
         }
 
         match self.mode {
             Mode::Input => match key.code {
                 KeyCode::Enter => self.evaluate(),
                 KeyCode::Backspace => {
-                    if self.cursor > 0 {
+                    if self.error.is_some() {
+                        self.error = None;
+                    } else if self.cursor > 0 {
                         self.cursor -= 1;
                         self.input.remove(self.cursor);
-                        self.error = None;
                     }
                 }
                 KeyCode::Delete => {
@@ -151,15 +379,15 @@ impl App {
                 }
                 KeyCode::Home => self.cursor = 0,
                 KeyCode::End => self.cursor = self.input.len(),
-                KeyCode::Char('j') if !self.history.is_empty() => {
+                KeyCode::Char('j') | KeyCode::Down if !self.history.is_empty() => {
                     self.mode = Mode::Navigate;
                     self.selected = Some(0);
                 }
-                KeyCode::Char('k') if !self.history.is_empty() => {
+                KeyCode::Char('k') | KeyCode::Up if !self.history.is_empty() => {
                     self.mode = Mode::Navigate;
                     self.selected = Some(0);
                 }
-                KeyCode::Char(c) => {
+                KeyCode::Char(c) if self.is_allowed_input_char(c) => {
                     self.input.insert(self.cursor, c);
                     self.cursor += 1;
                     self.error = None;
@@ -172,14 +400,14 @@ impl App {
                     self.mode = Mode::Input;
                     self.selected = None;
                 }
-                KeyCode::Char('j') => {
+                KeyCode::Char('j') | KeyCode::Down => {
                     if let Some(sel) = self.selected {
                         if sel > 0 {
                             self.selected = Some(sel - 1);
                         }
                     }
                 }
-                KeyCode::Char('k') => {
+                KeyCode::Char('k') | KeyCode::Up => {
                     if let Some(sel) = self.selected {
                         if sel + 1 < self.history.len() {
                             self.selected = Some(sel + 1);
@@ -195,7 +423,7 @@ impl App {
                         self.selected = None;
                     }
                 }
-                KeyCode::Char(c) => {
+                KeyCode::Char(c) if self.is_allowed_input_char(c) => {
                     self.mode = Mode::Input;
                     self.selected = None;
                     self.input.insert(self.cursor, c);
@@ -216,6 +444,8 @@ impl App {
                     self.selected = None;
                 }
             },
+
+            Mode::Help => {}
         }
         false
     }
@@ -239,18 +469,55 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
     let mut list_state = ListState::default();
     list_state.select(app.selected);
 
-    let list = List::new(items)
-        .direction(ListDirection::BottomToTop)
-        .block(Block::default().borders(Borders::ALL).title("履歴"))
-        .highlight_style(
-            Style::default()
-                .bg(Color::Blue)
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("▶ ");
+    if app.mode == Mode::Help {
+        let help_lines = [
+            "Help",
+            "",
+            "General",
+            "  q: Quit app (Input mode)",
+            "  ?: Open help",
+            "  Esc: Close help / cancel history selection",
+            "",
+            "History",
+            "  j or Down: Move to newer entry",
+            "  k or Up: Move to older entry",
+            "  Enter: Insert selected result",
+            "",
+            "Commands",
+            "  :add  :sub  :mul  :div  :calc",
+            "",
+            "Sequence",
+            "  c: Clear sequence accumulator",
+        ]
+        .join("\n");
 
-    f.render_stateful_widget(list, chunks[0], &mut list_state);
+        let help = Paragraph::new(help_lines).block(Block::default().borders(Borders::ALL).title("Help"));
+        f.render_widget(help, chunks[0]);
+    } else {
+        let selected_color = app.theme.accent_bg;
+        let history_block = if app.mode == Mode::Navigate {
+            Block::default()
+                .borders(Borders::ALL)
+                .title("History")
+                .border_style(Style::default().fg(selected_color))
+                .title_style(Style::default().fg(selected_color))
+        } else {
+            Block::default().borders(Borders::ALL).title("History")
+        };
+
+        let list = List::new(items)
+            .direction(ListDirection::BottomToTop)
+            .block(history_block)
+            .highlight_style(
+                Style::default()
+                    .bg(selected_color)
+                    .fg(app.theme.accent_fg)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("▶ ");
+
+        f.render_stateful_widget(list, chunks[0], &mut list_state);
+    }
 
     // Split bottom area into 2 rows: status line + input line
     let bottom_chunks = Layout::default()
@@ -259,17 +526,33 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
         .split(chunks[1]);
 
     // Status line (mode + help) - gray background, black text
-    let (mode_text, help_text) = match app.mode {
-        Mode::Input => ("INPUT", "[Enter:計算  Ctrl+C:終了  j/k:履歴選択]"),
-        Mode::Navigate => ("SELECT", "[j:↓新  k:↑古  Enter:挿入  Esc:戻る]"),
+    let mode_text = match app.mode {
+        Mode::Input => app.calc_mode.label().to_string(),
+        Mode::Navigate => format!("SELECT/{}", app.calc_mode.label()),
+        Mode::Help => "HELP".to_string(),
+    };
+    let help_text = match app.mode {
+        Mode::Input => "[Enter:run  q:quit  c:clear-seq  j/k/↑/↓:history  :add/:sub/:mul/:div/:calc]",
+        Mode::Navigate => "[j/↓:newer  k/↑:older  Enter:insert  Esc:cancel]",
+        Mode::Help => "[Esc:back]",
     };
     let status_line = format!("{:<8} {}", mode_text, help_text);
+    let status_bg = if app.mode == Mode::Input {
+        app.theme.accent_bg
+    } else {
+        Color::Gray
+    };
+    let status_fg = if app.mode == Mode::Input {
+        app.theme.accent_fg
+    } else {
+        Color::Black
+    };
     let status = Paragraph::new(status_line)
-        .style(Style::default().bg(Color::Gray).fg(Color::Black));
+        .style(Style::default().bg(status_bg).fg(status_fg));
     f.render_widget(status, bottom_chunks[0]);
 
-    // Input line with "vical > " prefix
-    let prefix = "vical > ";
+    // Input line with "#vical > " prefix
+    let prefix = "#vical > ";
     let (input_text, text_color) = if let Some(err) = &app.error {
         (format!("{}{}", prefix, err), Some(Color::Red))
     } else {
@@ -304,7 +587,8 @@ fn run_tui() -> io::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run_app(&mut terminal);
+    let theme = load_theme();
+    let result = run_app(&mut terminal, theme);
 
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
@@ -313,8 +597,8 @@ fn run_tui() -> io::Result<()> {
     result
 }
 
-fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> {
-    let mut app = App::new();
+fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, theme: Theme) -> io::Result<()> {
+    let mut app = App::new(theme);
     loop {
         terminal.draw(|f| ui(f, &app))?;
         if let Event::Key(key) = event::read()? {
@@ -346,7 +630,7 @@ impl<'a> Parser<'a> {
         let result = self.expr()?;
         self.skip_whitespace();
         if self.chars.peek().is_some() {
-            Err(format!("予期しない文字: '{}'", self.chars.peek().unwrap()))
+            Err(format!("Unexpected character: '{}'", self.chars.peek().unwrap()))
         } else {
             Ok(result)
         }
@@ -392,7 +676,7 @@ impl<'a> Parser<'a> {
                     self.chars.next();
                     let right = self.factor()?;
                     if right == 0.0 {
-                        return Err("ゼロ除算".to_string());
+                        return Err("Division by zero".to_string());
                     }
                     left /= right;
                 }
@@ -400,7 +684,7 @@ impl<'a> Parser<'a> {
                     self.chars.next();
                     let right = self.factor()?;
                     if right == 0.0 {
-                        return Err("ゼロ除算".to_string());
+                        return Err("Division by zero".to_string());
                     }
                     left %= right;
                 }
@@ -426,13 +710,13 @@ impl<'a> Parser<'a> {
                 let val = self.expr()?;
                 self.skip_whitespace();
                 if self.chars.next() != Some(')') {
-                    return Err("')' が見つかりません".to_string());
+                    return Err("')' not found".to_string());
                 }
                 Ok(val)
             }
             Some(&c) if c.is_ascii_digit() || c == '.' => self.number(),
-            Some(&c) => Err(format!("予期しない文字: '{}'", c)),
-            None => Err("式が途中で終わっています".to_string()),
+            Some(&c) => Err(format!("Unexpected character: '{}'", c)),
+            None => Err("Expression ended unexpectedly".to_string()),
         }
     }
 
@@ -446,6 +730,6 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        s.parse::<f64>().map_err(|_| format!("無効な数値: '{}'", s))
+        s.parse::<f64>().map_err(|_| format!("Invalid number: '{}'", s))
     }
 }
