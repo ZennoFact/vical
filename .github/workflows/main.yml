@@ -16,27 +16,27 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4 # v3からv4へアップデート推奨
+        uses: actions/checkout@v4
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable # actions-rs はメンテナンスが止まっているためこちらが主流
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Build
         run: cargo build --release
 
-      # 1. zip化するステップを追加
       - name: Archive Release
         shell: pwsh
         run: |
-          # 実行ファイル名をプロジェクト名に合わせて適宜変更してください
-          Compress-Archive -Path target/release/*.exe -DestinationPath release-windows.zip
+          # 確実にパスを通すため、特定のexeを指定するかワイルドカードを使用します
+          # ここで作成するzip名を vical.zip とします
+          Compress-Archive -Path target/release/*.exe -DestinationPath vical.zip
 
       - name: Create Release
-        uses: softprops/action-gh-release@v2 # v1からv2へアップデート推奨
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: auto-${{ github.run_number }}
-          name: Auto Build ${{ github.run_number }}
-          files: vical-windows.zip # zipファイルを指定
+          tag_name: v${{ github.run_number }}
+          name: Release ${{ github.run_number }}
+          # 上のステップで作ったファイル名と一致させる
+          files: vical.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          generate_release_notes: true
