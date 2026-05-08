@@ -5,7 +5,9 @@ use std::io::Write;
 use std::iter::Peekable;
 use std::path::PathBuf;
 use std::str::Chars;
+use std::time::{Duration, Instant};
 
+use arboard::Clipboard;
 use crossterm::{
     event::{self, Event, KeyCode},
     execute,
@@ -116,12 +118,28 @@ fn main() {
         return;
     }
 
-    if args[1] == "-h" || args[1] == "--help" {
+    let mut copy_result = false;
+    let mut positional: Vec<String> = Vec::new();
+    for arg in args.iter().skip(1) {
+        if arg == "-c" || arg == "--copy" {
+            copy_result = true;
+        } else {
+            positional.push(arg.clone());
+        }
+    }
+
+    if positional.is_empty() {
+        eprintln!("Error: no expression or mode specified");
+        eprintln!("Use --help for usage information");
+        std::process::exit(1);
+    }
+
+    if positional[0] == "-h" || positional[0] == "--help" {
         print_cli_help();
         return;
     }
 
-    if args[1] == "--add" || args[1] == "-a" {
+    if positional[0] == "--add" || positional[0] == "-a" {
         if let Err(e) = run_add_mode() {
             eprintln!("Add mode error: {}", e);
             std::process::exit(1);
@@ -129,7 +147,7 @@ fn main() {
         return;
     }
 
-    if args[1] == "--sub" || args[1] == "-s" {
+    if positional[0] == "--sub" || positional[0] == "-s" {
         if let Err(e) = run_sub_mode() {
             eprintln!("Sub mode error: {}", e);
             std::process::exit(1);
@@ -137,7 +155,7 @@ fn main() {
         return;
     }
 
-    if args[1] == "--pow" || args[1] == "-p" {
+    if positional[0] == "--pow" || positional[0] == "-p" {
         if let Err(e) = run_pow_mode() {
             eprintln!("Pow mode error: {}", e);
             std::process::exit(1);
@@ -145,37 +163,52 @@ fn main() {
         return;
     }
 
-    if args[1] == "--binary" || args[1] == "-b" {
-        if let Err(e) = run_binary_mode(&args) {
+    if positional[0] == "--binary" || positional[0] == "-b" {
+        if let Err(e) = run_binary_mode(&positional, copy_result) {
             eprintln!("Binary mode error: {}", e);
             std::process::exit(1);
         }
         return;
     }
 
-    if args[1] == "--from-binary" || args[1] == "-fb" {
-        if let Err(e) = run_from_binary_mode(&args) {
+    if positional[0] == "--from-binary" || positional[0] == "-fb" {
+        if let Err(e) = run_from_binary_mode(&positional, copy_result) {
             eprintln!("From-binary mode error: {}", e);
             std::process::exit(1);
         }
         return;
     }
 
-    let expr: String = args[1..].concat();
+    let expr: String = positional.concat();
     let mut parser = Parser::new(&expr);
     match parser.parse() {
         Ok(result) => {
-            if result == result.trunc() && result.abs() < 1e15 {
-                println!("{}", result as i64);
+            let output = if result == result.trunc() && result.abs() < 1e15 {
+                format!("{}", result as i64)
             } else {
-                println!("{}", result);
+                format!("{}", result)
+            };
+
+            if copy_result {
+                if let Err(e) = copy_to_clipboard(&output) {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
             }
+
+            println!("{}", output);
         }
         Err(e) => {
             eprintln!("Error: {}", e);
             std::process::exit(1);
         }
     }
+}
+
+fn copy_to_clipboard(text: &str) -> Result<(), String> {
+    Clipboard::new()
+        .and_then(|mut clipboard| clipboard.set_text(text.to_string()))
+        .map_err(|e| format!("Clipboard copy failed: {}", e))
 }
 
 fn run_add_mode() -> io::Result<()> {
@@ -273,49 +306,59 @@ fn run_pow_mode() -> io::Result<()> {
     Ok(())
 }
 
-fn run_binary_mode(args: &[String]) -> Result<(), String> {
-    if args.len() != 3 {
+fn run_binary_mode(args: &[String], copy_result: bool) -> Result<(), String> {
+    if args.len() != 2 {
         return Err("Usage: vical --binary <decimal_integer>".to_string());
     }
 
-    let decimal = args[2]
+    let decimal = args[1]
         .parse::<i128>()
-        .map_err(|_| format!("Invalid decimal integer: {}", args[2]))?;
+        .map_err(|_| format!("Invalid decimal integer: {}", args[1]))?;
 
-    println!("{:b}", decimal);
+    let output = format!("{:b}", decimal);
+    if copy_result {
+        copy_to_clipboard(&output)?;
+    }
+    println!("{}", output);
     Ok(())
 }
 
-fn run_from_binary_mode(args: &[String]) -> Result<(), String> {
-    if args.len() != 3 {
+fn run_from_binary_mode(args: &[String], copy_result: bool) -> Result<(), String> {
+    if args.len() != 2 {
         return Err("Usage: vical --from-binary <binary_integer>".to_string());
     }
 
-    let binary = args[2].trim();
+    let binary = args[1].trim();
     let decimal = i128::from_str_radix(binary, 2)
-        .map_err(|_| format!("Invalid binary integer: {}", args[2]))?;
+        .map_err(|_| format!("Invalid binary integer: {}", args[1]))?;
 
-    println!("{}", decimal);
+    let output = format!("{}", decimal);
+    if copy_result {
+        copy_to_clipboard(&output)?;
+    }
+    println!("{}", output);
     Ok(())
 }
 
 fn print_cli_help() {
-    println!("vical CLI Help");
-    println!("Usage:");
-    println!("  vical <expression>");
-    println!("  vical --add    | -a");
-    println!("  vical --sub    | -s");
-    println!("  vical --pow    | -p");
-    println!("  vical --binary <decimal_integer>      | -b <decimal_integer>");
-    println!("  vical --from-binary <binary_integer>  | -fb <binary_integer>");
-    println!("  vical --help   | -h");
+    println!("vical - A versatile CLI calculator");
     println!();
-    println!("Examples:");
-    println!("  vical 1+2*3");
-    println!("  vical --binary 10");
-    println!("  vical -b 10");
-    println!("  vical --from-binary 1010");
-    println!("  vical -fb 1010");
+    println!("USAGE:");
+    println!("    vical [OPTIONS] [EXPRESSION]");
+    println!();
+    println!("COMMANDS:");
+    // インタラクティブ系を一箇所にまとめ、注記を添える
+    println!("    -a, --add           Interactive addition mode");
+    println!("    -s, --sub           Interactive subtraction mode");
+    println!("    -p, --pow           Interactive power mode");
+    println!("                        (Type 'q' to return to shell)");
+    println!();
+    println!("    -b, --binary <DEC>  Decimal to binary conversion");
+    println!("    -fb, --from-binary  Binary to decimal conversion");
+    println!();
+    println!("OPTIONS:");
+    println!("    -c, --copy          Copy result to clipboard");
+    println!("    -h, --help          Show this help message");
 }
 
 // ====== TUI ======
@@ -371,6 +414,8 @@ struct App {
     accumulator: Option<f64>,
     theme: Theme,
     error: Option<String>,
+    yank_pending: bool,
+    copied_until: Option<Instant>,
 }
 
 impl App {
@@ -385,6 +430,8 @@ impl App {
             accumulator: None,
             theme,
             error: None,
+            yank_pending: false,
+            copied_until: None,
         }
     }
 
@@ -441,6 +488,34 @@ impl App {
 
         self.input.clear();
         self.cursor = 0;
+        self.yank_pending = false;
+    }
+
+    fn tick(&mut self) {
+        if let Some(until) = self.copied_until {
+            if Instant::now() >= until {
+                self.copied_until = None;
+            }
+        }
+    }
+
+    fn copy_selected_result(&mut self) {
+        let Some(sel) = self.selected else {
+            return;
+        };
+
+        let history_index = self.history.len() - 1 - sel;
+        let result = self.history[history_index].1.clone();
+
+        match Clipboard::new().and_then(|mut clipboard| clipboard.set_text(result)) {
+            Ok(()) => {
+                self.copied_until = Some(Instant::now() + Duration::from_secs(1));
+                self.error = None;
+            }
+            Err(e) => {
+                self.error = Some(format!("Copy failed: {}", e));
+            }
+        }
     }
 
     fn evaluate(&mut self) {
@@ -518,10 +593,28 @@ impl App {
         self.cursor += s.chars().count();
     }
 
+    fn paste_clipboard_to_input(&mut self) {
+        match Clipboard::new().and_then(|mut clipboard| clipboard.get_text()) {
+            Ok(text) => {
+                for c in text.chars() {
+                    if self.is_allowed_input_char(c) {
+                        self.input.insert(self.cursor, c);
+                        self.cursor += 1;
+                    }
+                }
+                self.error = None;
+            }
+            Err(e) => {
+                self.error = Some(format!("Paste failed: {}", e));
+            }
+        }
+    }
+
     fn handle_key(&mut self, key: event::KeyEvent) -> bool {
         if key.code == KeyCode::Char('?') {
             self.mode = Mode::Help;
             self.selected = None;
+            self.yank_pending = false;
             return false;
         }
 
@@ -529,10 +622,12 @@ impl App {
             if key.code == KeyCode::Esc {
                 self.mode = Mode::Input;
             }
+            self.yank_pending = false;
             return false;
         }
 
         if key.code == KeyCode::Char('q') && self.mode == Mode::Input && !self.is_command_input() {
+            self.yank_pending = false;
             return true;
         }
 
@@ -541,13 +636,27 @@ impl App {
             self.error = None;
             self.input.clear();
             self.cursor = 0;
+            self.yank_pending = false;
+            return false;
+        }
+
+        if key.code == KeyCode::Char('p') && self.mode == Mode::Input && !self.is_command_input() {
+            self.paste_clipboard_to_input();
+            self.yank_pending = false;
             return false;
         }
 
         match self.mode {
             Mode::Input => match key.code {
                 KeyCode::Enter | KeyCode::Char('=') => self.evaluate(),
+                KeyCode::Esc => {
+                    self.input.clear();
+                    self.cursor = 0;
+                    self.error = None;
+                    self.yank_pending = false;
+                }
                 KeyCode::Backspace => {
+                    self.yank_pending = false;
                     if self.error.is_some() {
                         self.error = None;
                     } else if self.cursor > 0 {
@@ -556,45 +665,61 @@ impl App {
                     }
                 }
                 KeyCode::Delete => {
+                    self.yank_pending = false;
                     if self.cursor < self.input.len() {
                         self.input.remove(self.cursor);
                         self.error = None;
                     }
                 }
                 KeyCode::Left => {
+                    self.yank_pending = false;
                     if self.cursor > 0 {
                         self.cursor -= 1;
                     }
                 }
                 KeyCode::Right => {
+                    self.yank_pending = false;
                     if self.cursor < self.input.len() {
                         self.cursor += 1;
                     }
                 }
-                KeyCode::Home => self.cursor = 0,
-                KeyCode::End => self.cursor = self.input.len(),
+                KeyCode::Home => {
+                    self.yank_pending = false;
+                    self.cursor = 0;
+                }
+                KeyCode::End => {
+                    self.yank_pending = false;
+                    self.cursor = self.input.len();
+                }
                 KeyCode::Char('j') | KeyCode::Down if !self.history.is_empty() => {
                     self.mode = Mode::Navigate;
                     self.selected = Some(0);
+                    self.yank_pending = false;
                 }
                 KeyCode::Char('k') | KeyCode::Up if !self.history.is_empty() => {
                     self.mode = Mode::Navigate;
                     self.selected = Some(0);
+                    self.yank_pending = false;
                 }
                 KeyCode::Char(c) if self.is_allowed_input_char(c) => {
+                    self.yank_pending = false;
                     self.input.insert(self.cursor, c);
                     self.cursor += 1;
                     self.error = None;
                 }
-                _ => {}
+                _ => {
+                    self.yank_pending = false;
+                }
             },
 
             Mode::Navigate => match key.code {
                 KeyCode::Esc => {
                     self.mode = Mode::Input;
                     self.selected = None;
+                    self.yank_pending = false;
                 }
                 KeyCode::Char('j') | KeyCode::Down => {
+                    self.yank_pending = false;
                     if let Some(sel) = self.selected {
                         if sel > 0 {
                             self.selected = Some(sel - 1);
@@ -602,6 +727,7 @@ impl App {
                     }
                 }
                 KeyCode::Char('k') | KeyCode::Up => {
+                    self.yank_pending = false;
                     if let Some(sel) = self.selected {
                         if sel + 1 < self.history.len() {
                             self.selected = Some(sel + 1);
@@ -609,6 +735,7 @@ impl App {
                     }
                 }
                 KeyCode::Enter => {
+                    self.yank_pending = false;
                     if let Some(sel) = self.selected {
                         let history_index = self.history.len() - 1 - sel;
                         let result = self.history[history_index].1.clone();
@@ -617,7 +744,16 @@ impl App {
                         self.selected = None;
                     }
                 }
+                KeyCode::Char('y') => {
+                    if self.yank_pending {
+                        self.yank_pending = false;
+                        self.copy_selected_result();
+                    } else {
+                        self.yank_pending = true;
+                    }
+                }
                 KeyCode::Char(c) if self.is_allowed_input_char(c) => {
+                    self.yank_pending = false;
                     self.mode = Mode::Input;
                     self.selected = None;
                     self.input.insert(self.cursor, c);
@@ -625,6 +761,7 @@ impl App {
                     self.error = None;
                 }
                 KeyCode::Backspace => {
+                    self.yank_pending = false;
                     self.mode = Mode::Input;
                     self.selected = None;
                     if self.cursor > 0 {
@@ -634,6 +771,7 @@ impl App {
                     }
                 }
                 _ => {
+                    self.yank_pending = false;
                     self.mode = Mode::Input;
                     self.selected = None;
                 }
@@ -665,17 +803,18 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
 
     if app.mode == Mode::Help {
         let help_lines = [
-            "Help",
             "",
             "General",
             "  q: Quit app (Input mode)",
             "  ?: Open help",
+            "  p: Paste clipboard into input",
             "  Esc: Close help / cancel history selection",
             "",
             "History",
             "  j or Down: Move to newer entry",
             "  k or Up: Move to older entry",
             "  Enter: Insert selected result",
+            "  yy: Copy selected result",
             "",
             "Commands",
             "  :add  :sub  :mul  :div  :pow  :calc",
@@ -726,7 +865,7 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
         Mode::Help => "HELP".to_string(),
     };
     let help_text = match app.mode {
-        Mode::Input => "[Enter:run  q:quit  c:clear-seq  j/k/↑/↓:history  :add/:sub/:mul/:div/:pow/:calc]",
+        Mode::Input => "[Enter:run  q:quit  c:clear-seq  p:paste  j/k/↑/↓:history  :add/:sub/:mul/:div/:pow/:calc]",
         Mode::Navigate => "[j/↓:newer  k/↑:older  Enter:insert  Esc:cancel]",
         Mode::Help => "[Esc:back]",
     };
@@ -747,17 +886,20 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
 
     // Input line with "#vical > " prefix
     let prefix = "#vical > ";
-    let (input_text, text_color) = if let Some(err) = &app.error {
-        (format!("{}{}", prefix, err), Some(Color::Red))
+    let (input_text, input_style) = if app.copied_until.is_some() {
+        (
+            format!("{}copied!", prefix),
+            Style::default()
+                .fg(app.theme.accent_bg)
+                .bg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else if let Some(err) = &app.error {
+        (format!("{}{}", prefix, err), Style::default().fg(Color::Red))
     } else {
-        (format!("{}{}", prefix, app.input_string()), None)
+        (format!("{}{}", prefix, app.input_string()), Style::default())
     };
 
-    let input_style = if let Some(color) = text_color {
-        Style::default().fg(color)
-    } else {
-        Style::default()
-    };
     let input_para = Paragraph::new(input_text).style(input_style);
     f.render_widget(input_para, bottom_chunks[1]);
 
@@ -794,7 +936,13 @@ fn run_tui() -> io::Result<()> {
 fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, theme: Theme) -> io::Result<()> {
     let mut app = App::new(theme);
     loop {
+        app.tick();
         terminal.draw(|f| ui(f, &app))?;
+
+        if !event::poll(Duration::from_millis(50))? {
+            continue;
+        }
+
         if let Event::Key(key) = event::read()? {
             if key.kind != event::KeyEventKind::Press {
                 continue;
