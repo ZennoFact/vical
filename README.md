@@ -14,12 +14,12 @@ Download zip only
 
 - vical: Launches the application
 - vical expression: Performs calculations in the CLI
-- vical --add: Starts interactive addition mode
-- vical --sub: Starts interactive subtraction mode
-- vical --pow: Starts interactive power mode
-- vical --binary decimal_integer: Converts a decimal integer to binary
-- vical --from-binary binary_integer: Converts a binary integer to decimal
-- vical -h / vical --help: Shows CLI help
+- vical --add / -a: Starts interactive addition mode
+- vical --sub / -s: Starts interactive subtraction mode
+- vical --pow / -p: Starts interactive power mode
+- vical --binary decimal_integer / -b decimal_integer: Converts a decimal integer to binary
+- vical --from-binary binary_integer / -fb binary_integer: Converts a binary integer to decimal
+- vical --help / -h: Shows CLI help
 
 ## Help
 
@@ -36,6 +36,7 @@ Download zip only
   - :sub -> Sub Sequence Mode
   - :mul -> Mul Sequence Mode
   - :div -> Div Sequence Mode
+  - :pow -> Pow Sequence Mode
   - :calc -> Nomal Mode
 - Sequence
   - c: Clear sequence accumulator

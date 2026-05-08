@@ -121,7 +121,7 @@ fn main() {
         return;
     }
 
-    if args[1] == "--add" {
+    if args[1] == "--add" || args[1] == "-a" {
         if let Err(e) = run_add_mode() {
             eprintln!("Add mode error: {}", e);
             std::process::exit(1);
@@ -129,7 +129,7 @@ fn main() {
         return;
     }
 
-    if args[1] == "--sub" {
+    if args[1] == "--sub" || args[1] == "-s" {
         if let Err(e) = run_sub_mode() {
             eprintln!("Sub mode error: {}", e);
             std::process::exit(1);
@@ -137,7 +137,7 @@ fn main() {
         return;
     }
 
-    if args[1] == "--pow" {
+    if args[1] == "--pow" || args[1] == "-p" {
         if let Err(e) = run_pow_mode() {
             eprintln!("Pow mode error: {}", e);
             std::process::exit(1);
@@ -145,7 +145,7 @@ fn main() {
         return;
     }
 
-    if args[1] == "--binary" {
+    if args[1] == "--binary" || args[1] == "-b" {
         if let Err(e) = run_binary_mode(&args) {
             eprintln!("Binary mode error: {}", e);
             std::process::exit(1);
@@ -153,7 +153,7 @@ fn main() {
         return;
     }
 
-    if args[1] == "--from-binary" {
+    if args[1] == "--from-binary" || args[1] == "-fb" {
         if let Err(e) = run_from_binary_mode(&args) {
             eprintln!("From-binary mode error: {}", e);
             std::process::exit(1);
@@ -303,17 +303,19 @@ fn print_cli_help() {
     println!("vical CLI Help");
     println!("Usage:");
     println!("  vical <expression>");
-    println!("  vical --add");
-    println!("  vical --sub");
-    println!("  vical --pow");
-    println!("  vical --binary <decimal_integer>");
-    println!("  vical --from-binary <binary_integer>");
-    println!("  vical -h | --help");
+    println!("  vical --add    | -a");
+    println!("  vical --sub    | -s");
+    println!("  vical --pow    | -p");
+    println!("  vical --binary <decimal_integer>      | -b <decimal_integer>");
+    println!("  vical --from-binary <binary_integer>  | -fb <binary_integer>");
+    println!("  vical --help   | -h");
     println!();
     println!("Examples:");
     println!("  vical 1+2*3");
     println!("  vical --binary 10");
+    println!("  vical -b 10");
     println!("  vical --from-binary 1010");
+    println!("  vical -fb 1010");
 }
 
 // ====== TUI ======
