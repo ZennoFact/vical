@@ -1,41 +1,44 @@
-name: Build and Release
+name: Build & Release
 
 on:
-  push:
-    # タグ（例: v1.0.0）がプッシュされた時にリリースを作成する設定が一般的です
-    tags:
-      - "v*" 
-  workflow_dispatch: # 手動実行も可能
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+
+permissions:
+  contents: write
 
 jobs:
-  build-and-release:
-    name: Build and Release
+  build:
+    if: github.event.pull_request.merged == true
     runs-on: windows-latest
-    
-    # Releasesへの書き込み権限を明示的に付与
-    permissions:
-      contents: write
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4 # v3からv4へアップデート推奨
 
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable # actions-rs はメンテナンスが止まっているためこちらが主流
 
-      - name: Build project
+      - name: Build
         run: cargo build --release
 
-      - name: Create ZIP archive
+      # 1. zip化するステップを追加
+      - name: Archive Release
         shell: pwsh
         run: |
-          Compress-Archive -Path target/release/*.exe -DestinationPath vical.zip
+          # 実行ファイル名をプロジェクト名に合わせて適宜変更してください
+          Compress-Archive -Path target/release/*.exe -DestinationPath release-windows.zip
 
-      - name: Release
-        uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/') # タグがプッシュされた時のみ実行
+      - name: Create Release
+        uses: softprops/action-gh-release@v2 # v1からv2へアップデート推奨
         with:
-          files: vical.zip
+          tag_name: auto-${{ github.run_number }}
+          name: Auto Build ${{ github.run_number }}
+          files: vical-windows.zip # zipファイルを指定
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
