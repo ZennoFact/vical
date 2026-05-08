@@ -5,7 +5,9 @@ use std::io::Write;
 use std::iter::Peekable;
 use std::path::PathBuf;
 use std::str::Chars;
+use std::time::{Duration, Instant};
 
+use arboard::Clipboard;
 use crossterm::{
     event::{self, Event, KeyCode},
     execute,
@@ -371,6 +373,8 @@ struct App {
     accumulator: Option<f64>,
     theme: Theme,
     error: Option<String>,
+    yank_pending: bool,
+    copied_until: Option<Instant>,
 }
 
 impl App {
@@ -385,6 +389,8 @@ impl App {
             accumulator: None,
             theme,
             error: None,
+            yank_pending: false,
+            copied_until: None,
         }
     }
 
@@ -441,6 +447,34 @@ impl App {
 
         self.input.clear();
         self.cursor = 0;
+        self.yank_pending = false;
+    }
+
+    fn tick(&mut self) {
+        if let Some(until) = self.copied_until {
+            if Instant::now() >= until {
+                self.copied_until = None;
+            }
+        }
+    }
+
+    fn copy_selected_result(&mut self) {
+        let Some(sel) = self.selected else {
+            return;
+        };
+
+        let history_index = self.history.len() - 1 - sel;
+        let result = self.history[history_index].1.clone();
+
+        match Clipboard::new().and_then(|mut clipboard| clipboard.set_text(result)) {
+            Ok(()) => {
+                self.copied_until = Some(Instant::now() + Duration::from_secs(1));
+                self.error = None;
+            }
+            Err(e) => {
+                self.error = Some(format!("Copy failed: {}", e));
+            }
+        }
     }
 
     fn evaluate(&mut self) {
@@ -518,10 +552,28 @@ impl App {
         self.cursor += s.chars().count();
     }
 
+    fn paste_clipboard_to_input(&mut self) {
+        match Clipboard::new().and_then(|mut clipboard| clipboard.get_text()) {
+            Ok(text) => {
+                for c in text.chars() {
+                    if self.is_allowed_input_char(c) {
+                        self.input.insert(self.cursor, c);
+                        self.cursor += 1;
+                    }
+                }
+                self.error = None;
+            }
+            Err(e) => {
+                self.error = Some(format!("Paste failed: {}", e));
+            }
+        }
+    }
+
     fn handle_key(&mut self, key: event::KeyEvent) -> bool {
         if key.code == KeyCode::Char('?') {
             self.mode = Mode::Help;
             self.selected = None;
+            self.yank_pending = false;
             return false;
         }
 
@@ -529,10 +581,12 @@ impl App {
             if key.code == KeyCode::Esc {
                 self.mode = Mode::Input;
             }
+            self.yank_pending = false;
             return false;
         }
 
         if key.code == KeyCode::Char('q') && self.mode == Mode::Input && !self.is_command_input() {
+            self.yank_pending = false;
             return true;
         }
 
@@ -541,13 +595,27 @@ impl App {
             self.error = None;
             self.input.clear();
             self.cursor = 0;
+            self.yank_pending = false;
+            return false;
+        }
+
+        if key.code == KeyCode::Char('p') && self.mode == Mode::Input && !self.is_command_input() {
+            self.paste_clipboard_to_input();
+            self.yank_pending = false;
             return false;
         }
 
         match self.mode {
             Mode::Input => match key.code {
                 KeyCode::Enter | KeyCode::Char('=') => self.evaluate(),
+                KeyCode::Esc => {
+                    self.input.clear();
+                    self.cursor = 0;
+                    self.error = None;
+                    self.yank_pending = false;
+                }
                 KeyCode::Backspace => {
+                    self.yank_pending = false;
                     if self.error.is_some() {
                         self.error = None;
                     } else if self.cursor > 0 {
@@ -556,45 +624,61 @@ impl App {
                     }
                 }
                 KeyCode::Delete => {
+                    self.yank_pending = false;
                     if self.cursor < self.input.len() {
                         self.input.remove(self.cursor);
                         self.error = None;
                     }
                 }
                 KeyCode::Left => {
+                    self.yank_pending = false;
                     if self.cursor > 0 {
                         self.cursor -= 1;
                     }
                 }
                 KeyCode::Right => {
+                    self.yank_pending = false;
                     if self.cursor < self.input.len() {
                         self.cursor += 1;
                     }
                 }
-                KeyCode::Home => self.cursor = 0,
-                KeyCode::End => self.cursor = self.input.len(),
+                KeyCode::Home => {
+                    self.yank_pending = false;
+                    self.cursor = 0;
+                }
+                KeyCode::End => {
+                    self.yank_pending = false;
+                    self.cursor = self.input.len();
+                }
                 KeyCode::Char('j') | KeyCode::Down if !self.history.is_empty() => {
                     self.mode = Mode::Navigate;
                     self.selected = Some(0);
+                    self.yank_pending = false;
                 }
                 KeyCode::Char('k') | KeyCode::Up if !self.history.is_empty() => {
                     self.mode = Mode::Navigate;
                     self.selected = Some(0);
+                    self.yank_pending = false;
                 }
                 KeyCode::Char(c) if self.is_allowed_input_char(c) => {
+                    self.yank_pending = false;
                     self.input.insert(self.cursor, c);
                     self.cursor += 1;
                     self.error = None;
                 }
-                _ => {}
+                _ => {
+                    self.yank_pending = false;
+                }
             },
 
             Mode::Navigate => match key.code {
                 KeyCode::Esc => {
                     self.mode = Mode::Input;
                     self.selected = None;
+                    self.yank_pending = false;
                 }
                 KeyCode::Char('j') | KeyCode::Down => {
+                    self.yank_pending = false;
                     if let Some(sel) = self.selected {
                         if sel > 0 {
                             self.selected = Some(sel - 1);
@@ -602,6 +686,7 @@ impl App {
                     }
                 }
                 KeyCode::Char('k') | KeyCode::Up => {
+                    self.yank_pending = false;
                     if let Some(sel) = self.selected {
                         if sel + 1 < self.history.len() {
                             self.selected = Some(sel + 1);
@@ -609,6 +694,7 @@ impl App {
                     }
                 }
                 KeyCode::Enter => {
+                    self.yank_pending = false;
                     if let Some(sel) = self.selected {
                         let history_index = self.history.len() - 1 - sel;
                         let result = self.history[history_index].1.clone();
@@ -617,7 +703,16 @@ impl App {
                         self.selected = None;
                     }
                 }
+                KeyCode::Char('y') => {
+                    if self.yank_pending {
+                        self.yank_pending = false;
+                        self.copy_selected_result();
+                    } else {
+                        self.yank_pending = true;
+                    }
+                }
                 KeyCode::Char(c) if self.is_allowed_input_char(c) => {
+                    self.yank_pending = false;
                     self.mode = Mode::Input;
                     self.selected = None;
                     self.input.insert(self.cursor, c);
@@ -625,6 +720,7 @@ impl App {
                     self.error = None;
                 }
                 KeyCode::Backspace => {
+                    self.yank_pending = false;
                     self.mode = Mode::Input;
                     self.selected = None;
                     if self.cursor > 0 {
@@ -634,6 +730,7 @@ impl App {
                     }
                 }
                 _ => {
+                    self.yank_pending = false;
                     self.mode = Mode::Input;
                     self.selected = None;
                 }
@@ -665,7 +762,6 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
 
     if app.mode == Mode::Help {
         let help_lines = [
-            "Help",
             "",
             "General",
             "  q: Quit app (Input mode)",
@@ -676,6 +772,7 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
             "  j or Down: Move to newer entry",
             "  k or Up: Move to older entry",
             "  Enter: Insert selected result",
+            "  yy: Copy selected result",
             "",
             "Commands",
             "  :add  :sub  :mul  :div  :pow  :calc",
@@ -726,7 +823,7 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
         Mode::Help => "HELP".to_string(),
     };
     let help_text = match app.mode {
-        Mode::Input => "[Enter:run  q:quit  c:clear-seq  j/k/↑/↓:history  :add/:sub/:mul/:div/:pow/:calc]",
+        Mode::Input => "[Enter:run  q:quit  c:clear-seq  p:paste  j/k/↑/↓:history  :add/:sub/:mul/:div/:pow/:calc]",
         Mode::Navigate => "[j/↓:newer  k/↑:older  Enter:insert  Esc:cancel]",
         Mode::Help => "[Esc:back]",
     };
@@ -747,17 +844,20 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
 
     // Input line with "#vical > " prefix
     let prefix = "#vical > ";
-    let (input_text, text_color) = if let Some(err) = &app.error {
-        (format!("{}{}", prefix, err), Some(Color::Red))
+    let (input_text, input_style) = if app.copied_until.is_some() {
+        (
+            format!("{}copied!", prefix),
+            Style::default()
+                .fg(app.theme.accent_bg)
+                .bg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else if let Some(err) = &app.error {
+        (format!("{}{}", prefix, err), Style::default().fg(Color::Red))
     } else {
-        (format!("{}{}", prefix, app.input_string()), None)
+        (format!("{}{}", prefix, app.input_string()), Style::default())
     };
 
-    let input_style = if let Some(color) = text_color {
-        Style::default().fg(color)
-    } else {
-        Style::default()
-    };
     let input_para = Paragraph::new(input_text).style(input_style);
     f.render_widget(input_para, bottom_chunks[1]);
 
@@ -794,7 +894,13 @@ fn run_tui() -> io::Result<()> {
 fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, theme: Theme) -> io::Result<()> {
     let mut app = App::new(theme);
     loop {
+        app.tick();
         terminal.draw(|f| ui(f, &app))?;
+
+        if !event::poll(Duration::from_millis(50))? {
+            continue;
+        }
+
         if let Event::Key(key) = event::read()? {
             if key.kind != event::KeyEventKind::Press {
                 continue;
