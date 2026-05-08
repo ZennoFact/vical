@@ -118,12 +118,28 @@ fn main() {
         return;
     }
 
-    if args[1] == "-h" || args[1] == "--help" {
+    let mut copy_result = false;
+    let mut positional: Vec<String> = Vec::new();
+    for arg in args.iter().skip(1) {
+        if arg == "-c" || arg == "--copy" {
+            copy_result = true;
+        } else {
+            positional.push(arg.clone());
+        }
+    }
+
+    if positional.is_empty() {
+        eprintln!("Error: no expression or mode specified");
+        eprintln!("Use --help for usage information");
+        std::process::exit(1);
+    }
+
+    if positional[0] == "-h" || positional[0] == "--help" {
         print_cli_help();
         return;
     }
 
-    if args[1] == "--add" || args[1] == "-a" {
+    if positional[0] == "--add" || positional[0] == "-a" {
         if let Err(e) = run_add_mode() {
             eprintln!("Add mode error: {}", e);
             std::process::exit(1);
@@ -131,7 +147,7 @@ fn main() {
         return;
     }
 
-    if args[1] == "--sub" || args[1] == "-s" {
+    if positional[0] == "--sub" || positional[0] == "-s" {
         if let Err(e) = run_sub_mode() {
             eprintln!("Sub mode error: {}", e);
             std::process::exit(1);
@@ -139,7 +155,7 @@ fn main() {
         return;
     }
 
-    if args[1] == "--pow" || args[1] == "-p" {
+    if positional[0] == "--pow" || positional[0] == "-p" {
         if let Err(e) = run_pow_mode() {
             eprintln!("Pow mode error: {}", e);
             std::process::exit(1);
@@ -147,37 +163,52 @@ fn main() {
         return;
     }
 
-    if args[1] == "--binary" || args[1] == "-b" {
-        if let Err(e) = run_binary_mode(&args) {
+    if positional[0] == "--binary" || positional[0] == "-b" {
+        if let Err(e) = run_binary_mode(&positional, copy_result) {
             eprintln!("Binary mode error: {}", e);
             std::process::exit(1);
         }
         return;
     }
 
-    if args[1] == "--from-binary" || args[1] == "-fb" {
-        if let Err(e) = run_from_binary_mode(&args) {
+    if positional[0] == "--from-binary" || positional[0] == "-fb" {
+        if let Err(e) = run_from_binary_mode(&positional, copy_result) {
             eprintln!("From-binary mode error: {}", e);
             std::process::exit(1);
         }
         return;
     }
 
-    let expr: String = args[1..].concat();
+    let expr: String = positional.concat();
     let mut parser = Parser::new(&expr);
     match parser.parse() {
         Ok(result) => {
-            if result == result.trunc() && result.abs() < 1e15 {
-                println!("{}", result as i64);
+            let output = if result == result.trunc() && result.abs() < 1e15 {
+                format!("{}", result as i64)
             } else {
-                println!("{}", result);
+                format!("{}", result)
+            };
+
+            if copy_result {
+                if let Err(e) = copy_to_clipboard(&output) {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
             }
+
+            println!("{}", output);
         }
         Err(e) => {
             eprintln!("Error: {}", e);
             std::process::exit(1);
         }
     }
+}
+
+fn copy_to_clipboard(text: &str) -> Result<(), String> {
+    Clipboard::new()
+        .and_then(|mut clipboard| clipboard.set_text(text.to_string()))
+        .map_err(|e| format!("Clipboard copy failed: {}", e))
 }
 
 fn run_add_mode() -> io::Result<()> {
@@ -275,49 +306,59 @@ fn run_pow_mode() -> io::Result<()> {
     Ok(())
 }
 
-fn run_binary_mode(args: &[String]) -> Result<(), String> {
-    if args.len() != 3 {
+fn run_binary_mode(args: &[String], copy_result: bool) -> Result<(), String> {
+    if args.len() != 2 {
         return Err("Usage: vical --binary <decimal_integer>".to_string());
     }
 
-    let decimal = args[2]
+    let decimal = args[1]
         .parse::<i128>()
-        .map_err(|_| format!("Invalid decimal integer: {}", args[2]))?;
+        .map_err(|_| format!("Invalid decimal integer: {}", args[1]))?;
 
-    println!("{:b}", decimal);
+    let output = format!("{:b}", decimal);
+    if copy_result {
+        copy_to_clipboard(&output)?;
+    }
+    println!("{}", output);
     Ok(())
 }
 
-fn run_from_binary_mode(args: &[String]) -> Result<(), String> {
-    if args.len() != 3 {
+fn run_from_binary_mode(args: &[String], copy_result: bool) -> Result<(), String> {
+    if args.len() != 2 {
         return Err("Usage: vical --from-binary <binary_integer>".to_string());
     }
 
-    let binary = args[2].trim();
+    let binary = args[1].trim();
     let decimal = i128::from_str_radix(binary, 2)
-        .map_err(|_| format!("Invalid binary integer: {}", args[2]))?;
+        .map_err(|_| format!("Invalid binary integer: {}", args[1]))?;
 
-    println!("{}", decimal);
+    let output = format!("{}", decimal);
+    if copy_result {
+        copy_to_clipboard(&output)?;
+    }
+    println!("{}", output);
     Ok(())
 }
 
 fn print_cli_help() {
-    println!("vical CLI Help");
-    println!("Usage:");
-    println!("  vical <expression>");
-    println!("  vical --add    | -a");
-    println!("  vical --sub    | -s");
-    println!("  vical --pow    | -p");
-    println!("  vical --binary <decimal_integer>      | -b <decimal_integer>");
-    println!("  vical --from-binary <binary_integer>  | -fb <binary_integer>");
-    println!("  vical --help   | -h");
+    println!("vical - A versatile CLI calculator");
     println!();
-    println!("Examples:");
-    println!("  vical 1+2*3");
-    println!("  vical --binary 10");
-    println!("  vical -b 10");
-    println!("  vical --from-binary 1010");
-    println!("  vical -fb 1010");
+    println!("USAGE:");
+    println!("    vical [OPTIONS] [EXPRESSION]");
+    println!();
+    println!("COMMANDS:");
+    // インタラクティブ系を一箇所にまとめ、注記を添える
+    println!("    -a, --add           Interactive addition mode");
+    println!("    -s, --sub           Interactive subtraction mode");
+    println!("    -p, --pow           Interactive power mode");
+    println!("                        (Type 'q' to return to shell)");
+    println!();
+    println!("    -b, --binary <DEC>  Decimal to binary conversion");
+    println!("    -fb, --from-binary  Binary to decimal conversion");
+    println!();
+    println!("OPTIONS:");
+    println!("    -c, --copy          Copy result to clipboard");
+    println!("    -h, --help          Show this help message");
 }
 
 // ====== TUI ======
@@ -766,6 +807,7 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
             "General",
             "  q: Quit app (Input mode)",
             "  ?: Open help",
+            "  p: Paste clipboard into input",
             "  Esc: Close help / cancel history selection",
             "",
             "History",
