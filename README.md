@@ -17,6 +17,9 @@ Download zip only
 - vical --add: Starts interactive addition mode
 - vical --sub: Starts interactive subtraction mode
 - vical --pow: Starts interactive power mode
+- vical --binary decimal_integer: Converts a decimal integer to binary
+- vical --from-binary binary_integer: Converts a binary integer to decimal
+- vical -h / vical --help: Shows CLI help
 
 ## Help
 

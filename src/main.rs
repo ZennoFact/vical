@@ -116,6 +116,11 @@ fn main() {
         return;
     }
 
+    if args[1] == "-h" || args[1] == "--help" {
+        print_cli_help();
+        return;
+    }
+
     if args[1] == "--add" {
         if let Err(e) = run_add_mode() {
             eprintln!("Add mode error: {}", e);
@@ -135,6 +140,22 @@ fn main() {
     if args[1] == "--pow" {
         if let Err(e) = run_pow_mode() {
             eprintln!("Pow mode error: {}", e);
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    if args[1] == "--binary" {
+        if let Err(e) = run_binary_mode(&args) {
+            eprintln!("Binary mode error: {}", e);
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    if args[1] == "--from-binary" {
+        if let Err(e) = run_from_binary_mode(&args) {
+            eprintln!("From-binary mode error: {}", e);
             std::process::exit(1);
         }
         return;
@@ -250,6 +271,49 @@ fn run_pow_mode() -> io::Result<()> {
     }
 
     Ok(())
+}
+
+fn run_binary_mode(args: &[String]) -> Result<(), String> {
+    if args.len() != 3 {
+        return Err("Usage: vical --binary <decimal_integer>".to_string());
+    }
+
+    let decimal = args[2]
+        .parse::<i128>()
+        .map_err(|_| format!("Invalid decimal integer: {}", args[2]))?;
+
+    println!("{:b}", decimal);
+    Ok(())
+}
+
+fn run_from_binary_mode(args: &[String]) -> Result<(), String> {
+    if args.len() != 3 {
+        return Err("Usage: vical --from-binary <binary_integer>".to_string());
+    }
+
+    let binary = args[2].trim();
+    let decimal = i128::from_str_radix(binary, 2)
+        .map_err(|_| format!("Invalid binary integer: {}", args[2]))?;
+
+    println!("{}", decimal);
+    Ok(())
+}
+
+fn print_cli_help() {
+    println!("vical CLI Help");
+    println!("Usage:");
+    println!("  vical <expression>");
+    println!("  vical --add");
+    println!("  vical --sub");
+    println!("  vical --pow");
+    println!("  vical --binary <decimal_integer>");
+    println!("  vical --from-binary <binary_integer>");
+    println!("  vical -h | --help");
+    println!();
+    println!("Examples:");
+    println!("  vical 1+2*3");
+    println!("  vical --binary 10");
+    println!("  vical --from-binary 1010");
 }
 
 // ====== TUI ======
