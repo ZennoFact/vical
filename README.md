@@ -16,6 +16,7 @@ Download zip only
 - vical expression: Performs calculations in the CLI
 - vical --add: Starts interactive addition mode
 - vical --sub: Starts interactive subtraction mode
+- vical --pow: Starts interactive power mode
 
 ## Help
 

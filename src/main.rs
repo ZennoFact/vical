@@ -132,6 +132,14 @@ fn main() {
         return;
     }
 
+    if args[1] == "--pow" {
+        if let Err(e) = run_pow_mode() {
+            eprintln!("Pow mode error: {}", e);
+            std::process::exit(1);
+        }
+        return;
+    }
+
     let expr: String = args[1..].concat();
     let mut parser = Parser::new(&expr);
     match parser.parse() {
@@ -211,6 +219,39 @@ fn run_sub_mode() -> io::Result<()> {
     Ok(())
 }
 
+fn run_pow_mode() -> io::Result<()> {
+    let mut total: Option<f64> = None;
+    let stdin = io::stdin();
+    let mut stdout = io::stdout();
+
+    loop {
+        let display = App::format_result(total.unwrap_or(0.0));
+        print!("#vical-pow: {} > ", display);
+        stdout.flush()?;
+
+        let mut line = String::new();
+        let read = stdin.read_line(&mut line)?;
+        if read == 0 {
+            break;
+        }
+
+        let input = line.trim();
+        if input.eq_ignore_ascii_case("q") {
+            break;
+        }
+
+        match input.parse::<f64>() {
+            Ok(value) => match total {
+                Some(current) => total = Some(current.powf(value)),
+                None => total = Some(value),
+            },
+            Err(_) => eprintln!("Invalid number: {}", input),
+        }
+    }
+
+    Ok(())
+}
+
 // ====== TUI ======
 
 #[derive(PartialEq)]
@@ -227,6 +268,7 @@ enum CalcMode {
     Sub,
     Mul,
     Div,
+    Pow,
 }
 
 impl CalcMode {
@@ -237,6 +279,7 @@ impl CalcMode {
             CalcMode::Sub => "SUB",
             CalcMode::Mul => "MUL",
             CalcMode::Div => "DIV",
+            CalcMode::Pow => "POW",
         }
     }
 
@@ -247,6 +290,7 @@ impl CalcMode {
             CalcMode::Sub => "-",
             CalcMode::Mul => "*",
             CalcMode::Div => "/",
+            CalcMode::Pow => "^",
         }
     }
 }
@@ -292,7 +336,7 @@ impl App {
         } else if self.input.is_empty() && self.cursor == 0 && c == ':' {
             true
         } else {
-            c.is_ascii_digit() || matches!(c, '+' | '-' | '*' | '/' | '%' | 'P' | '(' | ')' | ' ')
+            c.is_ascii_digit() || matches!(c, '+' | '-' | '*' | '/' | '%' | '^' | 'P' | '(' | ')' | ' ')
         }
     }
 
@@ -316,6 +360,7 @@ impl App {
             ":sub" => Some(CalcMode::Sub),
             ":mul" => Some(CalcMode::Mul),
             ":div" => Some(CalcMode::Div),
+            ":pow" => Some(CalcMode::Pow),
             ":calc" => Some(CalcMode::Calc),
             _ => None,
         };
@@ -365,6 +410,10 @@ impl App {
                             }
                             acc / value
                         }
+                        None => value,
+                    },
+                    CalcMode::Pow => match self.accumulator {
+                        Some(acc) => acc.powf(value),
                         None => value,
                     },
                 };
@@ -563,7 +612,7 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
             "  Enter: Insert selected result",
             "",
             "Commands",
-            "  :add  :sub  :mul  :div  :calc",
+            "  :add  :sub  :mul  :div  :pow  :calc",
             "",
             "Sequence",
             "  c: Clear sequence accumulator",
@@ -611,7 +660,7 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
         Mode::Help => "HELP".to_string(),
     };
     let help_text = match app.mode {
-        Mode::Input => "[Enter:run  q:quit  c:clear-seq  j/k/↑/↓:history  :add/:sub/:mul/:div/:calc]",
+        Mode::Input => "[Enter:run  q:quit  c:clear-seq  j/k/↑/↓:history  :add/:sub/:mul/:div/:pow/:calc]",
         Mode::Navigate => "[j/↓:newer  k/↑:older  Enter:insert  Esc:cancel]",
         Mode::Help => "[Esc:back]",
     };
@@ -743,17 +792,17 @@ impl<'a> Parser<'a> {
 
     fn term(&mut self) -> Result<f64, String> {
         self.skip_whitespace();
-        let mut left = self.factor()?;
+        let mut left = self.power()?;
         loop {
             self.skip_whitespace();
             match self.chars.peek() {
                 Some(&'*') => {
                     self.chars.next();
-                    left *= self.factor()?;
+                    left *= self.power()?;
                 }
                 Some(&'/') => {
                     self.chars.next();
-                    let right = self.factor()?;
+                    let right = self.power()?;
                     if right == 0.0 {
                         return Err("Division by zero".to_string());
                     }
@@ -761,7 +810,7 @@ impl<'a> Parser<'a> {
                 }
                 Some(&'%') => {
                     self.chars.next();
-                    let right = self.factor()?;
+                    let right = self.power()?;
                     if right == 0.0 {
                         return Err("Division by zero".to_string());
                     }
@@ -771,6 +820,18 @@ impl<'a> Parser<'a> {
             }
         }
         Ok(left)
+    }
+
+    fn power(&mut self) -> Result<f64, String> {
+        let base = self.factor()?;
+        self.skip_whitespace();
+        if self.chars.peek() == Some(&'^') {
+            self.chars.next();
+            let exp = self.power()?; // right-associative
+            Ok(base.powf(exp))
+        } else {
+            Ok(base)
+        }
     }
 
     fn factor(&mut self) -> Result<f64, String> {
